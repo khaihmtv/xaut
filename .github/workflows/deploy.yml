@@ -1,4 +1,4 @@
-name: Deploy to AWS
+name: Auto Deploy to AWS VPS
 
 on:
   push:
@@ -10,28 +10,36 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
+    - name: Deploy via SSH
+      uses: appleboy/ssh-action@v1.0.3
+      with:
+        host: ${{ secrets.VPS_HOST }}
+        username: ${{ secrets.VPS_USER }}
+        key: ${{ secrets.VPS_KEY }}
+        script: |
+          cd ~/xaut
+          git pull origin main
+          docker-compose down
+          docker-compose up -d --buildname: Auto Deploy to AWS VPS
 
-      - name: Configure SSH
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.AWS_PRIVATE_KEY }}" > ~/.ssh/xaut-key.pem
-          chmod 600 ~/.ssh/xaut-key.pem
-          ssh-keyscan -H 13.239.19.84 >> ~/.ssh/known_hosts
+on:
+  push:
+    branches:
+      - main
 
-      - name: Deploy to AWS
-        run: |
-          ssh -i ~/.ssh/xaut-key.pem ec2-user@13.239.19.84 << 'EOF'
-          cd ~/xaut || mkdir -p ~/xaut && cd ~/xaut
-          git clone https://github.com/khaihmtv/XAUT.git . || git pull origin main
-          docker build -t xaut-api:latest .
-          docker stop xaut-api || true
-          docker rm xaut-api || true
-          docker run -d --name xaut-api --restart always -p 8000:8000 -e DATABASE_URL=postgresql://xaut_user:xaut_password@xaut-db:5432/xaut_db -e DEBUG=False xaut-api:latest
-          echo "Deployment completed successfully!"
-          EOF
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
 
-      - name: Notify deployment
-        if: success()
-        run: echo "✅ Deployment to AWS successful! Application running at: https://13.239.19.84"
+    steps:
+    - name: Deploy via SSH
+      uses: appleboy/ssh-action@v1.0.3
+      with:
+        host: ${{ secrets.VPS_HOST }}
+        username: ${{ secrets.VPS_USER }}
+        key: ${{ secrets.VPS_KEY }}
+        script: |
+          cd ~/xaut
+          git pull origin main
+          docker-compose down
+          docker-compose up -d --build
