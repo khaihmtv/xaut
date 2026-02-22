@@ -1,6 +1,6 @@
 import os
 
-SYMBOL = "BTC-USDT-SWAP"
+SYMBOL = "XAU-USDT-SWAP"
 TIMEFRAME = "1H"
 
 TOTAL_CAPITAL = float(os.getenv("TOTAL_CAPITAL", 400))
