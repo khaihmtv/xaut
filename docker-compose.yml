@@ -1,35 +1,45 @@
-
-
 services:
+
   db:
     image: postgres:15-alpine
+    container_name: xaut-db
     environment:
       POSTGRES_USER: xaut_user
       POSTGRES_PASSWORD: xaut_password
       POSTGRES_DB: xaut_db
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U xaut_user"]
       interval: 10s
       timeout: 5s
       retries: 5
+    restart: always
 
   web:
     build: .
-    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
-    volumes:
-      - .:/app
+    container_name: xaut-web
+    command: uvicorn main:app --host 0.0.0.0 --port 8000
     ports:
       - "8000:8000"
     environment:
       DATABASE_URL: postgresql://xaut_user:xaut_password@db:5432/xaut_db
-      DEBUG: "True"
+      DEBUG: "False"
     depends_on:
       db:
         condition: service_healthy
+    restart: always
+
+  bot:
+    build: .
+    container_name: xaut-bot
+    command: python bot/main.py
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: always
 
 volumes:
   postgres_data:
