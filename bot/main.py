@@ -23,6 +23,11 @@ def run():
         candles = client.get_candles()
         trend, price, spacing, size = engine.analyze(candles)
 
+        if not trend:
+            print("Analyze failed. Skip cycle.")
+            time.sleep(100)
+            return
+
         orders = engine.build_grid(trend, price, spacing, size)
 
         client.cancel_all_orders()

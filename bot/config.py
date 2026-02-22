@@ -1,6 +1,6 @@
 import os
 
-SYMBOL = "XAUT-USDT-SWAP"
+SYMBOL = "BTC-USDT-SWAP"
 TIMEFRAME = "1H"
 
 TOTAL_CAPITAL = float(os.getenv("TOTAL_CAPITAL", 400))
@@ -14,8 +14,8 @@ ATR_PERIOD = 14
 KILL_SWITCH_DRAWDOWN = 0.2
 MAX_FUNDING = 0.0005
 
-API_KEY = os.getenv("OKX_API_KEY")
-API_SECRET = os.getenv("OKX_API_SECRET")
-API_PASSPHRASE = os.getenv("OKX_API_PASSPHRASE")
+API_KEY = os.getenv("TOKX_API_KEY")
+API_SECRET = os.getenv("TOKX_API_SECRET")
+API_PASSPHRASE = os.getenv("TOKX_API_PASSPHRASE")
 
 BASE_URL = "https://www.okx.com"

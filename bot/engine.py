@@ -6,11 +6,26 @@ class GridEngine:
 
     def __init__(self, client):
         self.client = client
-
     def analyze(self, candles):
-        df = pd.DataFrame(candles).iloc[::-1]
+
+        if not candles:
+            print("No candle data")
+            return None, None, None, None
+
+        df = pd.DataFrame(candles)
+
+        if df.empty:
+            print("DataFrame empty")
+            return None, None, None, None
+
+        if df.shape[1] < 9:
+            print("Unexpected candle format:", df.head())
+            return None, None, None, None
+
+        df = df.iloc[::-1]
+
         df.columns = ["ts","open","high","low","close","vol",
-                      "volCcy","volCcyQuote","confirm"]
+                    "volCcy","volCcyQuote","confirm"]
 
         df["close"] = df["close"].astype(float)
         df["high"] = df["high"].astype(float)
@@ -23,13 +38,20 @@ class GridEngine:
         ema = df["ema"].iloc[-1]
         atr = df["atr"].iloc[-1]
 
+        if pd.isna(ema) or pd.isna(atr):
+            print("Indicator not ready")
+            return None, None, None, None
+
         trend = "buy" if price > ema else "sell"
 
         grid_spacing = atr * 0.5
-        grid_size = (TOTAL_CAPITAL * BOT_RATIO) / GRID_LEVELS
+        usdt_per_grid = (TOTAL_CAPITAL * BOT_RATIO) / GRID_LEVELS
+
+        contract_value = price * 0.001   # 1 contract = 0.001 XAU
+        grid_size = usdt_per_grid / contract_value
 
         return trend, price, grid_spacing, grid_size
-
+    
     def build_grid(self, trend, price, spacing, size):
         orders = []
 
@@ -44,7 +66,7 @@ class GridEngine:
             orders.append({
                 "side": side,
                 "price": round(level_price, 2),
-                "size": round(size, 4)
+                "size": max(1, int(size))
             })
 
         return orders
