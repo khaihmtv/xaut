@@ -1,7 +1,7 @@
 import os
 
 SYMBOL = "XAU-USDT-SWAP"
-TIMEFRAME = "1H"
+TIMEFRAME = "15m"
 
 TOTAL_CAPITAL = float(os.getenv("TOTAL_CAPITAL", 400))
 BOT_RATIO = 0.6
@@ -18,4 +18,8 @@ API_KEY = os.getenv("TOKX_API_KEY")
 API_SECRET = os.getenv("TOKX_API_SECRET")
 API_PASSPHRASE = os.getenv("TOKX_API_PASSPHRASE")
 
+
+# ─── Mode ───────────────────────────────────────────────────────────────────
+# "1" = Simulated (demo) | "0" = Live (thật) — CẨNTHẬN khi đổi sang "0"
+SIMULATED = os.getenv("OKX_SIMULATED", "1")
 BASE_URL = "https://www.okx.com"
