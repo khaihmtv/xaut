@@ -4,4 +4,4 @@ app = FastAPI()
 
 @app.get("/")
 async def read_root():
-    return {"Hello": "22"}
+    return {"Hello": "24"}
