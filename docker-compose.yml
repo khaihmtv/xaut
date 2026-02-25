@@ -33,7 +33,7 @@ services:
   bot:
     build: .
     container_name: xaut-bot
-    command: python bot/main.py
+    command: python backtest_xauusd.py
     env_file:
       - .env
     depends_on:
