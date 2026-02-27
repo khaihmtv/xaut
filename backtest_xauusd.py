@@ -35,7 +35,7 @@ except ImportError:
     sys.exit(1)
 
 # Symbol — XAU/USD perpetual swap trên OKX
-SYMBOL    = "XAUUSDT-SWAP"
+SYMBOL    = "XAU-USDT-SWAP"
 TIMEFRAME = "1H"          # OKX dùng "1H" cho khung 1 giờ
 
 # Tham số chiến lược (tốt nhất từ grid search #2)
