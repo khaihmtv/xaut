@@ -35,7 +35,7 @@ except ImportError:
     sys.exit(1)
 
 # Symbol — XAU/USD perpetual swap trên OKX
-SYMBOL    = "XAUUSDT-SWAP"
+SYMBOL    = "XAU-USDT-SWAP"
 TIMEFRAME = "1H"          # OKX dùng "1H" cho khung 1 giờ
 
 # Tham số chiến lược (tốt nhất từ grid search #2)
@@ -52,7 +52,7 @@ MAX_DRAWDOWN_STOP = 0.20   # Dừng bot nếu drawdown > 20% (bảo thủ hơn b
 MAX_DAILY_LOSS    = 0.05   # Dừng trong ngày nếu lỗ > 5% vốn
 
 # Giờ trade (UTC) — 7h-17h UTC = 14h-00h giờ VN
-TRADE_HOURS_UTC = list(range(7, 17))
+TRADE_HOURS_UTC = list(range(0, 24))
 
 # Chu kỳ kiểm tra (giây) — 60s để tránh spam API
 CHECK_INTERVAL = 60
