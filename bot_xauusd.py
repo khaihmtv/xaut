@@ -35,7 +35,7 @@ except ImportError:
     sys.exit(1)
 
 # Symbol — XAU/USD perpetual swap trên OKX
-SYMBOL    = "XAU-USDT-SWAP"
+SYMBOL    = "XAUUSDT-SWAP"
 TIMEFRAME = "1H"          # OKX dùng "1H" cho khung 1 giờ
 
 # Tham số chiến lược (tốt nhất từ grid search #2)
@@ -51,11 +51,8 @@ RISK_PER_TRADE    = 0.01   # 1% vốn mỗi lệnh
 MAX_DRAWDOWN_STOP = 0.20   # Dừng bot nếu drawdown > 20% (bảo thủ hơn backtest)
 MAX_DAILY_LOSS    = 0.05   # Dừng trong ngày nếu lỗ > 5% vốn
 
-# Từ
-#TRADE_HOURS_UTC = list(range(7, 17))
-
-# Thành
-TRADE_HOURS_UTC = list(range(0, 24))
+# Giờ trade (UTC) — 7h-17h UTC = 14h-00h giờ VN
+TRADE_HOURS_UTC = list(range(7, 17))
 
 # Chu kỳ kiểm tra (giây) — 60s để tránh spam API
 CHECK_INTERVAL = 60
@@ -92,7 +89,8 @@ class OKXError(Exception):
 
 
 class OKXClient:
-    TIMEOUT = 10
+    TIMEOUT     = 20    # tăng từ 10s lên 20s cho EC2
+    MAX_RETRIES = 3     # tự retry khi timeout
 
     def __init__(self):
         self.base_url  = BASE_URL
@@ -122,23 +120,31 @@ class OKXClient:
     def _request(self, method, path, body=""):
         url     = self.base_url + path
         headers = self._headers(method, path, body)
-        try:
-            if method == "GET":
-                r = requests.get(url, headers=headers, timeout=self.TIMEOUT)
-            else:
-                r = requests.post(url, headers=headers, data=body, timeout=self.TIMEOUT)
-            r.raise_for_status()
-            data = r.json()
-        except requests.Timeout:
-            logger.error("Timeout: %s %s", method, path)
-            raise
-        except requests.RequestException as e:
-            logger.error("Request error: %s", e)
-            raise
 
-        if data.get("code") != "0":
-            raise OKXError(data.get("code", "?"), data.get("msg", "Unknown"))
-        return data
+        for attempt in range(1, self.MAX_RETRIES + 1):
+            try:
+                if method == "GET":
+                    r = requests.get(url, headers=headers, timeout=self.TIMEOUT)
+                else:
+                    r = requests.post(url, headers=headers, data=body, timeout=self.TIMEOUT)
+                r.raise_for_status()
+                data = r.json()
+
+                if data.get("code") != "0":
+                    raise OKXError(data.get("code", "?"), data.get("msg", "Unknown"))
+                return data
+
+            except requests.Timeout:
+                logger.warning("⏱ Timeout lần %d/%d: %s %s", attempt, self.MAX_RETRIES, method, path)
+                if attempt == self.MAX_RETRIES:
+                    raise
+                time.sleep(5 * attempt)   # chờ 5s, 10s trước khi retry
+
+            except requests.RequestException as e:
+                logger.warning("🌐 Lỗi mạng lần %d/%d: %s", attempt, self.MAX_RETRIES, e)
+                if attempt == self.MAX_RETRIES:
+                    raise
+                time.sleep(5 * attempt)
 
     def get_candles(self, limit=200):
         path = f"/api/v5/market/candles?instId={SYMBOL}&bar={TIMEFRAME}&limit={limit}"
@@ -395,6 +401,10 @@ def run_bot():
             break
         except OKXError as e:
             logger.error("OKX Error: %s", e)
+            time.sleep(30)
+        except (requests.Timeout, requests.ConnectionError) as e:
+            # Lỗi mạng tạm thời — log ngắn gọn, không cần traceback
+            logger.warning("🌐 Mạng tạm thời lỗi, thử lại sau 30s: %s", type(e).__name__)
             time.sleep(30)
         except Exception as e:
             logger.exception("Lỗi không mong đợi: %s", e)
