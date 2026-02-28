@@ -1,8 +1,0 @@
-2026-02-27 21:37:16 [INFO] ============================================================
-2026-02-27 21:37:16 [INFO] 🤖 BOT XAU/USD KHỞI ĐỘNG
-2026-02-27 21:37:16 [INFO]    Symbol:    XAU-USDT-SWAP
-2026-02-27 21:37:16 [INFO]    Strategy:  EMA 9/34/100 | ATR 14 | SL 2.0x | TP 3.0x
-2026-02-27 21:37:16 [INFO]    Risk/trade: 1% | Max DD: 20% | Max daily loss: 5%
-2026-02-27 21:37:16 [INFO]    Mode:      🔵 SIMULATED
-2026-02-27 21:37:16 [INFO] ============================================================
-2026-02-27 21:37:16 [CRITICAL] Không lấy được equity: encoding without a string argument
