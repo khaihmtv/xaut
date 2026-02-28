@@ -25,6 +25,8 @@ services:
     environment:
       DATABASE_URL: postgresql://xaut_user:xaut_password@db:5432/xaut_db
       DEBUG: "False"
+    volumes:
+      - logs_data:/app/logs   # ← đọc log từ volume chung
     depends_on:
       db:
         condition: service_healthy
@@ -33,9 +35,11 @@ services:
   bot:
     build: .
     container_name: xaut-bot
-    command: python backtest_xauusd.py
+    command: python bot_xauusd.py   # ← đổi thành bot thật
     env_file:
       - .env
+    volumes:
+      - logs_data:/app/logs   # ← ghi log vào volume chung
     depends_on:
       db:
         condition: service_healthy
@@ -43,3 +47,4 @@ services:
 
 volumes:
   postgres_data:
+  logs_data:      # ← volume chung cho logs
