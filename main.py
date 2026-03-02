@@ -105,7 +105,7 @@ async def stream_logs():
 
     async def event_generator():
         if not log_path:
-            yield "data: Chưa tìm thấy file log\n\n"
+            yield "data: Chưa tìm thấy file  log\n\n"
             return
         with open(log_path, encoding="utf-8") as f:
             f.seek(0, 2)   # đến cuối file
