@@ -12,7 +12,7 @@ import time
 import logging
 import json
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 
 import requests
@@ -35,7 +35,7 @@ except ImportError:
     sys.exit(1)
 
 # Symbol — XAU/USD perpetual swap trên OKX
-SYMBOL    = "XAU-USDT-SWAP"
+SYMBOL    = "XAUUSDT-SWAP"
 TIMEFRAME = "1H"          # OKX dùng "1H" cho khung 1 giờ
 
 # Tham số chiến lược (tốt nhất từ grid search #2)
@@ -52,7 +52,7 @@ MAX_DRAWDOWN_STOP = 0.20   # Dừng bot nếu drawdown > 20% (bảo thủ hơn b
 MAX_DAILY_LOSS    = 0.05   # Dừng trong ngày nếu lỗ > 5% vốn
 
 # Giờ trade (UTC) — 7h-17h UTC = 14h-00h giờ VN
-TRADE_HOURS_UTC = list(range(0, 24))
+TRADE_HOURS_UTC = list(range(7, 17))
 
 # Chu kỳ kiểm tra (giây) — 60s để tránh spam API
 CHECK_INTERVAL = 60
@@ -64,10 +64,6 @@ CHECK_INTERVAL = 60
 log_dir = Path("logs")
 log_dir.mkdir(exist_ok=True)
 log_file = log_dir / f"bot_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
-
-logging.Formatter.converter = lambda *args: datetime.now(
-    timezone(timedelta(hours=7))
-).timetuple()
 
 logging.basicConfig(
     level=logging.INFO,
@@ -181,7 +177,14 @@ class OKXClient:
 
     def place_order(self, side, size, ord_type="market", price=None,
                     sl_price=None, tp_price=None):
+        """
+        Bước 1: Đặt lệnh market/limit thuần (không kèm SL/TP).
+        Bước 2: Đặt SL/TP riêng qua algo order sau khi lệnh chính thành công.
+        OKX demo không hỗ trợ gắn SL/TP trực tiếp vào lệnh market.
+        """
         pos_side = "long" if side == "buy" else "short"
+
+        # ── Bước 1: Lệnh chính ───────────────────────────────────
         body_dict = {
             "instId":  SYMBOL,
             "tdMode":  "cross",
@@ -192,17 +195,85 @@ class OKXClient:
         }
         if price:
             body_dict["px"] = str(price)
-        if sl_price:
-            body_dict["slTriggerPx"] = str(sl_price)
-            body_dict["slOrdPx"]     = "-1"   # market SL
-            body_dict["slTriggerPxType"] = "last"
-        if tp_price:
-            body_dict["tpTriggerPx"] = str(tp_price)
-            body_dict["tpOrdPx"]     = "-1"   # market TP
-            body_dict["tpTriggerPxType"] = "last"
 
         body = json.dumps(body_dict)
-        return self._request("POST", "/api/v5/trade/order", body)
+        response = self._request("POST", "/api/v5/trade/order", body)
+
+        # ── Bước 2: Đặt SL/TP riêng (algo order) ────────────────
+        if sl_price or tp_price:
+            time.sleep(1)   # chờ lệnh chính khớp trước
+            self._place_algo_sltp(pos_side, size, sl_price, tp_price)
+
+        return response
+
+    def _place_algo_sltp(self, pos_side, size, sl_price=None, tp_price=None):
+        """
+        Đặt SL/TP riêng qua conditional orders.
+        OKX demo không hỗ trợ OCO → đặt SL và TP thành 2 lệnh riêng.
+        SL/TP phải tính từ entry thật, không phải giá ticker.
+        """
+        # Lấy entry price thật từ vị thế
+        try:
+            positions = self.get_positions()
+            if positions:
+                entry = float(positions[0]["avgPx"])
+                atr_sl = abs(sl_price - entry) if sl_price else 0
+                atr_tp = abs(tp_price - entry) if tp_price else 0
+                # Tính lại SL/TP từ entry thật
+                if pos_side == "long":
+                    sl_price = round(entry - atr_sl, 2) if sl_price else None
+                    tp_price = round(entry + atr_tp, 2) if tp_price else None
+                else:
+                    sl_price = round(entry + atr_sl, 2) if sl_price else None
+                    tp_price = round(entry - atr_tp, 2) if tp_price else None
+                logger.info("📌 Entry thật: %.2f | SL: %s | TP: %s", entry, sl_price, tp_price)
+        except Exception as e:
+            logger.warning("Không lấy được entry thật: %s", e)
+
+        # Đặt SL và TP thành 2 lệnh conditional riêng biệt
+        self._place_single_algo(pos_side, size, sl_price, is_sl=True)
+        self._place_single_algo(pos_side, size, tp_price, is_sl=False)
+
+    def _place_single_algo(self, pos_side, size, trigger_price, is_sl: bool):
+        """
+        Đặt SL hoặc TP riêng lẻ.
+        OKX quy tắc:
+          - SL short: slTriggerPx > giá hiện tại  → ordType=conditional, chỉ dùng slTriggerPx
+          - TP short: tpTriggerPx < giá hiện tại  → ordType=conditional, chỉ dùng tpTriggerPx
+          - SL long:  slTriggerPx < giá hiện tại
+          - TP long:  tpTriggerPx > giá hiện tại
+        Không được gộp cả sl và tp trong cùng 1 conditional order.
+        """
+        if not trigger_price:
+            return
+        close_side = "sell" if pos_side == "long" else "buy"
+
+        if is_sl:
+            trigger_key = "slTriggerPx"
+            ord_px_key  = "slOrdPx"
+            type_key    = "slTriggerPxType"
+        else:
+            trigger_key = "tpTriggerPx"
+            ord_px_key  = "tpOrdPx"
+            type_key    = "tpTriggerPxType"
+
+        body = json.dumps({
+            "instId":    SYMBOL,
+            "tdMode":    "cross",
+            "side":      close_side,
+            "posSide":   pos_side,
+            "ordType":   "conditional",
+            "sz":        str(size),
+            trigger_key: str(round(trigger_price, 2)),
+            ord_px_key:  "-1",   # market order khi chạm trigger
+            type_key:    "last",
+        })
+        try:
+            self._request("POST", "/api/v5/trade/order-algo", body)
+            label = "SL" if is_sl else "TP"
+            logger.info("🛡 %s đặt thành công @ %.2f", label, trigger_price)
+        except OKXError as e:
+            logger.error("❌ Đặt %s thất bại: %s", "SL" if is_sl else "TP", e)
 
     def close_position(self, pos_side):
         body = json.dumps({
@@ -501,12 +572,16 @@ def _tick(client: OKXClient, state: BotState, loop_count: int):
             sl_price  = round(sl, 2),
             tp_price  = round(tp, 2),
         )
+        # Chỉ đánh dấu đã xử lý nến này khi lệnh thành công
         state.last_signal_bar = last_bar_ts
         state.total_trades   += 1
         logger.info("✅ Lệnh đặt thành công: %s", response)
 
     except OKXError as e:
         logger.error("❌ Đặt lệnh thất bại: %s", e)
+        # Đánh dấu nến này để không spam retry liên tục
+        # Sẽ thử lại ở nến tiếp theo
+        state.last_signal_bar = last_bar_ts
 
 
 def _safe_shutdown(client: OKXClient):
