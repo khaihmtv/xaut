@@ -12,7 +12,7 @@ import time
 import logging
 import json
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import requests
@@ -64,6 +64,10 @@ CHECK_INTERVAL = 60
 log_dir = Path("logs")
 log_dir.mkdir(exist_ok=True)
 log_file = log_dir / f"bot_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+
+logging.Formatter.converter = lambda *args: datetime.now(
+    timezone(timedelta(hours=7))
+).timetuple()
 
 logging.basicConfig(
     level=logging.INFO,
