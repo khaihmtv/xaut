@@ -1,7 +1,7 @@
 """
 ╔══════════════════════════════════════════════════════════════╗
 ║         LIVE BOT – XAU/USD Futures trên OKX                 ║
-║         Chiến lược: EMA 9/34/100 + ATR (SL 2x, TP 3x)      ║
+║         Chiến lược: EMA 15/26/80 + ATR (SL 2.5x, TP 4x)   ║
 ║                                                              ║
 ║  Chạy:   python bot_xauusd.py                               ║
 ║  Dừng:   Ctrl+C                                             ║
@@ -12,7 +12,7 @@ import time
 import logging
 import json
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 import requests
@@ -38,21 +38,21 @@ except ImportError:
 SYMBOL    = "XAU-USDT-SWAP"
 TIMEFRAME = "1H"          # OKX dùng "1H" cho khung 1 giờ
 
-# Tham số chiến lược (tốt nhất từ grid search #2)
-EMA_FAST     = 9
-EMA_SLOW     = 34
-EMA_TREND    = 100
+# Tham số chiến lược (tốt nhất từ grid search v2)
+EMA_FAST     = 15   # 9  → 15
+EMA_SLOW     = 26   # 34 → 26
+EMA_TREND    = 80   # 100 → 80
 ATR_PERIOD   = 14
-ATR_SL_MULT  = 2.0
-ATR_TP_MULT  = 3.0
+ATR_SL_MULT  = 2.5  # 2.0 → 2.5
+ATR_TP_MULT  = 4.0  # 3.0 → 4.0
 
 # Quản lý vốn
 RISK_PER_TRADE    = 0.01   # 1% vốn mỗi lệnh
-MAX_DRAWDOWN_STOP = 0.20   # Dừng bot nếu drawdown > 20% (bảo thủ hơn backtest)
+MAX_DRAWDOWN_STOP = 0.20   # Dừng bot nếu drawdown > 20%
 MAX_DAILY_LOSS    = 0.05   # Dừng trong ngày nếu lỗ > 5% vốn
 
-# Giờ trade (UTC) — 7h-17h UTC = 14h-00h giờ VN
-TRADE_HOURS_UTC = list(range(0, 24))
+# Giờ trade (UTC) — 6h-17h UTC = 13h-00h giờ VN (mở rộng thêm 1h London open)
+TRADE_HOURS_UTC = list(range(6, 18))
 
 # Chu kỳ kiểm tra (giây) — 60s để tránh spam API
 CHECK_INTERVAL = 60
@@ -61,23 +61,23 @@ CHECK_INTERVAL = 60
 # 2. LOGGING
 # ══════════════════════════════════════════════════════════════
 
+VN_TZ = timezone(timedelta(hours=7))
+
 log_dir = Path("logs")
 log_dir.mkdir(exist_ok=True)
-log_file = log_dir / f"bot_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+log_file = log_dir / f"bot_{datetime.now(VN_TZ).strftime('%Y%m%d_%H%M%S')}.log"
 
-logging.Formatter.converter = lambda *args: datetime.now(
-    timezone(timedelta(hours=7))
-).timetuple()
+class _VNFormatter(logging.Formatter):
+    def formatTime(self, record, datefmt=None):
+        dt = datetime.fromtimestamp(record.created, tz=VN_TZ)
+        return dt.strftime("%Y-%m-%d %H:%M:%S")
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-    handlers=[
-        logging.FileHandler(log_file, encoding="utf-8"),
-        logging.StreamHandler(sys.stdout),
-    ],
-)
+_fmt = _VNFormatter("%(asctime)s [%(levelname)s] %(message)s")
+_fh  = logging.FileHandler(log_file, encoding="utf-8")
+_sh  = logging.StreamHandler(sys.stdout)
+_fh.setFormatter(_fmt)
+_sh.setFormatter(_fmt)
+logging.basicConfig(level=logging.INFO, handlers=[_fh, _sh])
 logger = logging.getLogger(__name__)
 
 
