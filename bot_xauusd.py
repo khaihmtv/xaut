@@ -1,7 +1,7 @@
 """
 ╔══════════════════════════════════════════════════════════════╗
 ║         LIVE BOT – XAU/USD Futures trên OKX                 ║
-║         Chiến lược: EMA 15/26/80 + ATR (SL 2.5x, TP 4x)   ║
+║         Chiến lược: EMA 15/26/80 + ATR (SL 2.5x, TP 4x) ok   ║
 ║                                                              ║
 ║  Chạy:   python bot_xauusd.py                               ║
 ║  Dừng:   Ctrl+C                                             ║
