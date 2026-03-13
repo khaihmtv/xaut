@@ -538,11 +538,10 @@ def _tick(client: OKXClient, state: BotState, loop_count: int):
         state.log_stats(equity)
 
     # Kiểm tra giờ trade
-    if not is_trade_hour():
-        if loop_count % 10 == 0:
-            logger.info("🕐 Ngoài giờ trade (UTC %dh). Đang chờ...",
-                        datetime.now(timezone.utc).hour)
-        return
+    #if not is_trade_hour():
+        #if loop_count % 10 == 0:
+        #    logger.info("🕐 Ngoài giờ trade (UTC %dh). Đang chờ...", datetime.now(timezone.utc).hour)
+        #return
 
     # Kiểm tra có đang giữ vị thế không
     positions = client.get_positions()
