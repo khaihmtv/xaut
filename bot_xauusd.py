@@ -1,7 +1,7 @@
 """
 ╔══════════════════════════════════════════════════════════════╗
 ║         LIVE BOT – XAU/USD Futures trên OKX                 ║
-║         Chiến lược: EMA 15/26/80 + ATR (SL 2.5x, TP 4x) ok   ║
+║         Chiến lược: EMA 15/26/80 + ATR (SL 2.5x, TP 4x)   ║
 ║                                                              ║
 ║  Chạy:   python bot_xauusd.py                               ║
 ║  Dừng:   Ctrl+C                                             ║
@@ -46,12 +46,15 @@ ATR_PERIOD   = 14
 ATR_SL_MULT  = 2.5  # 2.0 → 2.5
 ATR_TP_MULT  = 4.0  # 3.0 → 4.0
 
-# Quản lý vốn
-RISK_PER_TRADE    = 0.01   # 1% vốn mỗi lệnh
-MAX_DRAWDOWN_STOP = 0.20   # Dừng bot nếu drawdown > 20%
-MAX_DAILY_LOSS    = 0.05   # Dừng trong ngày nếu lỗ > 5% vốn
+# Đòn bẩy
+LEVERAGE     = 3    # x3 — chỉnh tại đây nếu muốn thay đổi
 
-# Giờ trade (UTC) — 6h-17h UTC = 13h-00h giờ VN (mở rộng thêm 1h London open)
+# Quản lý vốn
+RISK_PER_TRADE    = 0.5   # 1% vốn mỗi lệnh
+MAX_DRAWDOWN_STOP = 0.50   # Dừng bot nếu drawdown > 20%
+MAX_DAILY_LOSS    = 0.30   # Dừng trong ngày nếu lỗ > 5% vốn
+
+# Giờ trade (UTC) — 6h-17h UTC = 13h-00h giờ VN
 TRADE_HOURS_UTC = list(range(6, 18))
 
 # Chu kỳ kiểm tra (giây) — 60s để tránh spam API
@@ -295,6 +298,21 @@ class OKXClient:
         self._request("POST", "/api/v5/trade/cancel-batch-orders", json.dumps(cancel))
         logger.info("Đã huỷ %d lệnh chờ.", len(cancel))
 
+    def set_leverage(self, leverage: int):
+        """Cài đòn bẩy cho cả long và short."""
+        for pos_side in ("long", "short"):
+            body = json.dumps({
+                "instId":  SYMBOL,
+                "lever":   str(leverage),
+                "mgnMode": "cross",
+                "posSide": pos_side,
+            })
+            try:
+                self._request("POST", "/api/v5/account/set-leverage", body)
+                logger.info("⚙️  Leverage %s x%d ✅", pos_side, leverage)
+            except OKXError as e:
+                logger.warning("Không set leverage %s: %s", pos_side, e)
+
 
 # ══════════════════════════════════════════════════════════════
 # 4. CHỈ BÁO KỸ THUẬT
@@ -454,9 +472,13 @@ def run_bot():
     logger.info("   Risk/trade: %.0f%% | Max DD: %.0f%% | Max daily loss: %.0f%%",
                 RISK_PER_TRADE * 100, MAX_DRAWDOWN_STOP * 100, MAX_DAILY_LOSS * 100)
     logger.info("   Mode:      %s", "🔵 SIMULATED" if SIMULATED == "1" else "🔴 LIVE")
+    logger.info("   Leverage:  x%d", LEVERAGE)
     logger.info("=" * 60)
 
     client = OKXClient()
+
+    # Cài đòn bẩy
+    client.set_leverage(LEVERAGE)
 
     # Lấy equity ban đầu
     try:
