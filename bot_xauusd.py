@@ -50,9 +50,9 @@ ATR_TP_MULT  = 4.0  # 3.0 → 4.0
 LEVERAGE     = 3    # x3 — chỉnh tại đây nếu muốn thay đổi
 
 # Quản lý vốn
-RISK_PER_TRADE    = 0.5   # 1% vốn mỗi lệnh
-MAX_DRAWDOWN_STOP = 0.50   # Dừng bot nếu drawdown > 20%
-MAX_DAILY_LOSS    = 0.30   # Dừng trong ngày nếu lỗ > 5% vốn
+RISK_PER_TRADE    = 0.4   # 1% vốn mỗi lệnh
+MAX_DRAWDOWN_STOP = 0.30   # Dừng bot nếu drawdown > 20%
+MAX_DAILY_LOSS    = 0.10   # Dừng trong ngày nếu lỗ > 5% vốn
 
 # Giờ trade (UTC) — 6h-17h UTC = 13h-00h giờ VN
 TRADE_HOURS_UTC = list(range(6, 18))
@@ -445,15 +445,25 @@ class BotState:
 # ══════════════════════════════════════════════════════════════
 
 def calculate_size(equity: float, entry: float, sl: float) -> float:
-    """Tính size lệnh dựa trên % vốn rủi ro."""
+    """
+    Tính size lệnh dựa trên % vốn rủi ro + đòn bẩy.
+
+    Công thức:
+        risk_amount = equity x RISK_PER_TRADE   (số tiền chấp nhận mất)
+        sl_distance = |entry - sl|              (khoảng cách SL tính bằng USD/oz)
+        size        = (risk_amount / sl_distance) x LEVERAGE
+
+    Ví dụ: equity=100, risk=50%, entry=4976, SL=5024, LEVERAGE=3
+        risk_amount = 50
+        sl_distance = 48
+        size        = (50/48) x 3 = 3.1 -> 3 contracts
+    """
     risk_amount = equity * RISK_PER_TRADE
     sl_distance = abs(entry - sl)
     if sl_distance <= 0:
         return 0
 
-    # OKX XAUUSDT-SWAP: 1 contract = 1 oz vàng
-    # size = số contract
-    size = risk_amount / sl_distance
+    size = (risk_amount / sl_distance) * LEVERAGE
     size = max(1, round(size))   # tối thiểu 1 contract, làm tròn
     return size
 
@@ -538,10 +548,11 @@ def _tick(client: OKXClient, state: BotState, loop_count: int):
         state.log_stats(equity)
 
     # Kiểm tra giờ trade
-    #if not is_trade_hour():
-        #if loop_count % 10 == 0:
-        #    logger.info("🕐 Ngoài giờ trade (UTC %dh). Đang chờ...", datetime.now(timezone.utc).hour)
-        #return
+    if not is_trade_hour():
+        if loop_count % 10 == 0:
+            logger.info("🕐 Ngoài giờ trade (UTC %dh). Đang chờ...",
+                        datetime.now(timezone.utc).hour)
+        return
 
     # Kiểm tra có đang giữ vị thế không
     positions = client.get_positions()
