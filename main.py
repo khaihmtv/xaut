@@ -14,7 +14,7 @@ from fastapi import FastAPI, Query
 from fastapi.responses import HTMLResponse, StreamingResponse
 import asyncio
 
-app = FastAPI(title="Bot XAU/USD Dashboard")
+app = FastAPI(title="Bot XAU/USD Dashboard  s")
 
 # ── Tìm file log mới nhất ─────────────────────────────────────
 def get_latest_log() -> Path | None:
