@@ -1,394 +1,373 @@
 """
 ╔══════════════════════════════════════════════════════════════╗
-║         BACKTEST ENGINE – XAU/USD Futures                    ║
-║         Chiến lược: EMA Crossover + ATR Trailing Stop        ║
+║   GRID SEARCH ĐA COIN – BTC / XRP / SOL                    ║
+║   So sánh 1H vs 4H | Tham số tối ưu riêng từng coin        ║
 ║                                                              ║
-║  Cài đặt:  pip install yfinance pandas numpy                 ║
-║  Chạy:     python backtest_xauusd.py                         ║
+║   Chạy:  python grid_search_multicoin.py                    ║
+║   Thời gian ước tính: 30–60 phút (song song)               ║
 ╚══════════════════════════════════════════════════════════════╝
 """
 
 import pandas as pd
 import numpy as np
+import itertools
+import time
+import json
+from datetime import datetime
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from pathlib import Path
 
-# ─── Cài nếu chưa có: pip install yfinance ───────────────────
 try:
     import yfinance as yf
 except ImportError:
     print("Chưa cài yfinance. Chạy: pip install yfinance pandas numpy")
     exit()
 
-
 # ══════════════════════════════════════════════════════════════
-# 1. THAM SỐ – CHỈNH TẠI ĐÂY
-# ══════════════════════════════════════════════════════════════
-
-SYMBOL        = "GC=F"       # XAU/USD Futures trên Yahoo Finance
-INTERVAL      = "15m"        # ← Khung 15 phút
-PERIOD        = "60d"        # ← yfinance giới hạn 60 ngày cho 15m
-
-# EMA — dùng tham số tốt nhất từ grid search 1H (#2)
-EMA_FAST      = 9
-EMA_SLOW      = 34
-EMA_TREND     = 100
-
-# ATR
-ATR_PERIOD    = 14
-ATR_SL_MULT   = 2.0
-ATR_TP_MULT   = 3.0
-
-# News filter
-NEWS_BLACKOUT_HOURS = []
-
-# Quản lý vốn
-INITIAL_CAPITAL   = 10_000
-RISK_PER_TRADE    = 0.01
-MAX_DRAWDOWN_STOP = 0.30
-
-# Chỉ trade trong giờ thanh khoản cao (UTC)
-TRADE_HOURS_UTC = list(range(7, 17))
-
-
-# ══════════════════════════════════════════════════════════════
-# 2. LẤY DỮ LIỆU
+# 1. CẤU HÌNH
 # ══════════════════════════════════════════════════════════════
 
-def fetch_data(symbol: str, period: str, interval: str) -> pd.DataFrame:
-    print(f"📥 Đang tải dữ liệu {symbol} ({interval}, {period})...")
-    df = yf.download(symbol, period=period, interval=interval, auto_adjust=True)
+# Mapping OKX symbol → yfinance ticker
+COINS = {
+    "BTC-USDT-SWAP": "BTC-USD",
+    "XRP-USDT-SWAP": "XRP-USD",
+    "SOL-USDT-SWAP": "SOL-USD",
+}
 
-    if df.empty:
-        raise ValueError(f"Không lấy được dữ liệu cho {symbol}. Kiểm tra kết nối.")
+TIMEFRAMES = ["1h", "4h"]
 
-    df.columns = [c[0].lower() if isinstance(c, tuple) else c.lower() for c in df.columns]
+PARAM_GRID = {
+    "ema_fast":    [5, 9, 15, 21],
+    "ema_slow":    [21, 26, 34, 50],
+    "ema_trend":   [80, 100, 150, 200],
+    "atr_period":  [10, 14, 20],
+    "atr_sl_mult": [1.5, 2.0, 2.5, 3.0],
+    "atr_tp_mult": [2.5, 3.0, 3.5, 4.0],
+}
+
+TRADE_HOURS   = list(range(6, 18))   # 6h–17h UTC (tốt nhất từ backtest XAU)
+INITIAL_CAP   = 10_000
+RISK_PER_TRADE = 0.01
+MAX_DD_STOP   = 0.30
+TRAIN_MONTHS  = 18
+TEST_MONTHS   = 6
+MIN_TRADES    = 10
+
+# Ngưỡng lọc
+MIN_PF        = 1.3
+MIN_WR        = 38.0
+MAX_DD        = 25.0
+MIN_MONTHLY   = 0.5
+
+# ══════════════════════════════════════════════════════════════
+# 2. DATA
+# ══════════════════════════════════════════════════════════════
+
+def fetch_data(ticker: str, interval: str) -> pd.DataFrame:
+    # yfinance giới hạn: 1h → max 2y | 4h → max 2y (730 ngày)
+    period = "2y"
+    df = yf.download(ticker, period=period, interval=interval,
+                     auto_adjust=True, progress=False)
+    df.columns = [c[0].lower() if isinstance(c, tuple) else c.lower()
+                  for c in df.columns]
     df.index = pd.to_datetime(df.index, utc=True)
     df.dropna(inplace=True)
-
-    print(f"✅ Lấy được {len(df)} nến từ {df.index[0].date()} đến {df.index[-1].date()}")
     return df
 
 
-# ══════════════════════════════════════════════════════════════
-# 3. CHỈ BÁO KỸ THUẬT
-# ══════════════════════════════════════════════════════════════
-
-def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.copy()
-
-    # EMA
-    df["ema_fast"]  = df["close"].ewm(span=EMA_FAST,  adjust=False).mean()
-    df["ema_slow"]  = df["close"].ewm(span=EMA_SLOW,  adjust=False).mean()
-    df["ema_trend"] = df["close"].ewm(span=EMA_TREND, adjust=False).mean()
-
-    # ATR (True Range)
-    high_low   = df["high"] - df["low"]
-    high_close = (df["high"] - df["close"].shift(1)).abs()
-    low_close  = (df["low"]  - df["close"].shift(1)).abs()
-    tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
-    df["atr"] = tr.ewm(span=ATR_PERIOD, adjust=False).mean()
-
-    # Signal: crossover
-    df["cross_up"]   = (df["ema_fast"] > df["ema_slow"]) & (df["ema_fast"].shift(1) <= df["ema_slow"].shift(1))
-    df["cross_down"] = (df["ema_fast"] < df["ema_slow"]) & (df["ema_fast"].shift(1) >= df["ema_slow"].shift(1))
-
-    # Trend filter
-    df["uptrend"]   = df["close"] > df["ema_trend"]
-    df["downtrend"] = df["close"] < df["ema_trend"]
-
-    # Trade hour filter
-    df["valid_hour"] = df.index.hour.isin(TRADE_HOURS_UTC)
-
-    df.dropna(inplace=True)
-    return df
+def split(df: pd.DataFrame):
+    cutoff = df.index[-1] - pd.DateOffset(months=TEST_MONTHS)
+    return df[df.index < cutoff].copy(), df[df.index >= cutoff].copy()
 
 
 # ══════════════════════════════════════════════════════════════
-# 4. BACKTEST ENGINE
+# 3. BACKTEST ENGINE
 # ══════════════════════════════════════════════════════════════
 
-def run_backtest(df: pd.DataFrame) -> tuple[list, pd.Series]:
-    capital    = INITIAL_CAPITAL
-    peak_cap   = INITIAL_CAPITAL
-    trades     = []
-    equity_curve = [capital]
+def add_indicators(df, p):
+    d = df.copy()
+    d["ema_fast"]  = d["close"].ewm(span=p["ema_fast"],  adjust=False).mean()
+    d["ema_slow"]  = d["close"].ewm(span=p["ema_slow"],  adjust=False).mean()
+    d["ema_trend"] = d["close"].ewm(span=p["ema_trend"], adjust=False).mean()
 
-    position   = None   # None | dict
-    stopped_by_drawdown = False
+    hl  = d["high"] - d["low"]
+    hpc = (d["high"] - d["close"].shift(1)).abs()
+    lpc = (d["low"]  - d["close"].shift(1)).abs()
+    d["atr"] = pd.concat([hl, hpc, lpc], axis=1).max(axis=1)\
+                 .ewm(span=p["atr_period"], adjust=False).mean()
+
+    d["cross_up"]   = (d["ema_fast"] > d["ema_slow"]) & \
+                      (d["ema_fast"].shift(1) <= d["ema_slow"].shift(1))
+    d["cross_down"] = (d["ema_fast"] < d["ema_slow"]) & \
+                      (d["ema_fast"].shift(1) >= d["ema_slow"].shift(1))
+    d["uptrend"]    = d["close"] > d["ema_trend"]
+    d["downtrend"]  = d["close"] < d["ema_trend"]
+    d["valid_hour"] = d.index.hour.isin(TRADE_HOURS)
+    return d.dropna()
+
+
+def backtest(df, p):
+    capital  = INITIAL_CAP
+    peak     = INITIAL_CAP
+    trades   = []
+    equity   = [capital]
+    position = None
 
     for i in range(1, len(df)):
-        row  = df.iloc[i]
-        prev = df.iloc[i - 1]
+        row = df.iloc[i]
 
-        # ── Kiểm tra drawdown tổng ──────────────────────────
-        drawdown = (peak_cap - capital) / peak_cap
-        if drawdown >= MAX_DRAWDOWN_STOP:
-            if not stopped_by_drawdown:
-                print(f"\n🛑 Drawdown {drawdown:.1%} vượt ngưỡng {MAX_DRAWDOWN_STOP:.0%}. Bot dừng tại {row.name.date()}.")
-                stopped_by_drawdown = True
-            equity_curve.append(capital)
+        if (peak - capital) / peak >= MAX_DD_STOP:
+            equity.append(capital)
             continue
 
-        # ── Đang giữ lệnh → kiểm tra SL/TP ─────────────────
-        if position is not None:
+        if position:
             hit_sl = (position["side"] == "long"  and row["low"]  <= position["sl"]) or \
                      (position["side"] == "short" and row["high"] >= position["sl"])
             hit_tp = (position["side"] == "long"  and row["high"] >= position["tp"]) or \
                      (position["side"] == "short" and row["low"]  <= position["tp"])
 
-            close_price = None
-            close_reason = None
-
-            if hit_sl:
-                close_price  = position["sl"]
-                close_reason = "SL"
-            elif hit_tp:
-                close_price  = position["tp"]
-                close_reason = "TP"
-
-            if close_price is not None:
-                if position["side"] == "long":
-                    pnl = (close_price - position["entry"]) * position["size"]
-                else:
-                    pnl = (position["entry"] - close_price) * position["size"]
-
+            if hit_sl or hit_tp:
+                cp   = position["sl"] if hit_sl else position["tp"]
+                mult = 1 if position["side"] == "long" else -1
+                pnl  = mult * (cp - position["entry"]) * position["size"]
                 capital += pnl
-                peak_cap = max(peak_cap, capital)
-
-                trades.append({
-                    "open_time":  position["open_time"],
-                    "close_time": row.name,
-                    "side":       position["side"],
-                    "entry":      position["entry"],
-                    "close":      close_price,
-                    "sl":         position["sl"],
-                    "tp":         position["tp"],
-                    "size":       position["size"],
-                    "pnl":        round(pnl, 2),
-                    "result":     close_reason,
-                    "capital":    round(capital, 2),
-                })
+                peak     = max(peak, capital)
+                trades.append({"pnl": pnl, "win": hit_tp})
                 position = None
 
-        # ── Tìm tín hiệu vào lệnh mới ───────────────────────
-        if position is None and row["valid_hour"]:
+        if not position and row["valid_hour"]:
             signal = None
+            if row["cross_up"]   and row["uptrend"]:   signal = "long"
+            elif row["cross_down"] and row["downtrend"]: signal = "short"
 
-            if row["cross_up"] and row["uptrend"]:
-                signal = "long"
-            elif row["cross_down"] and row["downtrend"]:
-                signal = "short"
+            if signal:
+                entry   = row["close"]
+                atr     = row["atr"]
+                sl_dist = p["atr_sl_mult"] * atr
+                tp_dist = p["atr_tp_mult"] * atr
+                sl      = entry - sl_dist if signal == "long" else entry + sl_dist
+                tp      = entry + tp_dist if signal == "long" else entry - tp_dist
 
-            if signal is not None:
-                entry = row["close"]
-                atr   = row["atr"]
+                if sl_dist > 0:
+                    size = (capital * RISK_PER_TRADE) / sl_dist
+                    position = {"side": signal, "entry": entry,
+                                "sl": sl, "tp": tp, "size": size}
 
-                if signal == "long":
-                    sl = entry - ATR_SL_MULT * atr
-                    tp = entry + ATR_TP_MULT * atr
-                else:
-                    sl = entry + ATR_SL_MULT * atr
-                    tp = entry - ATR_TP_MULT * atr
+        equity.append(capital)
 
-                risk_amount = capital * RISK_PER_TRADE
-                sl_distance = abs(entry - sl)
-                size = risk_amount / sl_distance if sl_distance > 0 else 0
+    return trades, pd.Series(equity)
 
-                if size > 0:
-                    position = {
-                        "side":      signal,
-                        "entry":     entry,
-                        "sl":        sl,
-                        "tp":        tp,
-                        "size":      size,
-                        "open_time": row.name,
-                    }
 
-        equity_curve.append(capital)
+def calc_metrics(trades, equity, n_months):
+    if len(trades) < MIN_TRADES:
+        return None
+    df_t  = pd.DataFrame(trades)
+    wins  = df_t[df_t["pnl"] > 0]
+    loss  = df_t[df_t["pnl"] <= 0]
+    pf_d  = abs(loss["pnl"].sum())
+    pf    = wins["pnl"].sum() / pf_d if pf_d > 0 else 0
+    roll  = equity.cummax()
+    max_dd = ((equity - roll) / roll).min() * 100
+    total_ret  = (equity.iloc[-1] - INITIAL_CAP) / INITIAL_CAP * 100
+    avg_monthly = total_ret / max(1, n_months)
+    winrate = len(wins) / len(df_t) * 100
 
-    # Đóng lệnh cuối nếu còn
-    if position is not None:
-        last = df.iloc[-1]
-        close_price = last["close"]
-        if position["side"] == "long":
-            pnl = (close_price - position["entry"]) * position["size"]
-        else:
-            pnl = (position["entry"] - close_price) * position["size"]
-        capital += pnl
-        trades.append({
-            "open_time":  position["open_time"],
-            "close_time": last.name,
-            "side":       position["side"],
-            "entry":      position["entry"],
-            "close":      close_price,
-            "sl":         position["sl"],
-            "tp":         position["tp"],
-            "size":       position["size"],
-            "pnl":        round(pnl, 2),
-            "result":     "OPEN→CLOSED",
-            "capital":    round(capital, 2),
+    score = (pf / 3.0) * 0.4 + (avg_monthly / 5.0) * 0.35 + (1 + max_dd / 25) * 0.25
+
+    return {
+        "trades":      len(df_t),
+        "per_month":   round(len(df_t) / n_months, 1),
+        "winrate":     round(winrate, 1),
+        "pf":          round(pf, 3),
+        "max_dd":      round(max_dd, 1),
+        "avg_monthly": round(avg_monthly, 2),
+        "total_ret":   round(total_ret, 2),
+        "score":       round(score, 4),
+    }
+
+
+def passes_filter(m):
+    if not m:
+        return False
+    return (m["pf"] >= MIN_PF and
+            m["winrate"] >= MIN_WR and
+            abs(m["max_dd"]) <= MAX_DD and
+            m["avg_monthly"] >= MIN_MONTHLY)
+
+
+# ══════════════════════════════════════════════════════════════
+# 4. GRID SEARCH CHO 1 COIN + 1 TIMEFRAME
+# ══════════════════════════════════════════════════════════════
+
+def run_single(args):
+    """Chạy trong subprocess — không dùng logger, chỉ return dict."""
+    okx_symbol, ticker, interval = args
+
+    try:
+        df = fetch_data(ticker, interval)
+    except Exception as e:
+        return {"symbol": okx_symbol, "interval": interval, "error": str(e), "results": []}
+
+    train_df, test_df = split(df)
+
+    # Số tháng thực tế
+    delta = df.index[-1] - df.index[0]
+    total_months = delta.days / 30
+    n_train = max(1, total_months * TRAIN_MONTHS / (TRAIN_MONTHS + TEST_MONTHS))
+    n_test  = max(1, total_months * TEST_MONTHS  / (TRAIN_MONTHS + TEST_MONTHS))
+
+    keys   = list(PARAM_GRID.keys())
+    values = list(PARAM_GRID.values())
+    combos = list(itertools.product(*values))
+
+    passed = []
+    for combo in combos:
+        p = dict(zip(keys, combo))
+        if p["ema_fast"] >= p["ema_slow"]:
+            continue
+
+        tr_ind = add_indicators(train_df, p)
+        tr_trades, tr_eq = backtest(tr_ind, p)
+        tr_m = calc_metrics(tr_trades, tr_eq, n_train)
+
+        if not passes_filter(tr_m):
+            continue
+
+        te_ind = add_indicators(test_df, p)
+        te_trades, te_eq = backtest(te_ind, p)
+        te_m = calc_metrics(te_trades, te_eq, n_test)
+
+        passed.append({
+            "params":  p,
+            "train":   tr_m,
+            "test":    te_m,
+            "score":   tr_m["score"],
         })
-        equity_curve.append(capital)
 
-    equity_series = pd.Series(equity_curve, index=df.index[:len(equity_curve)])
-    return trades, equity_series
+    # Sắp xếp theo score train
+    passed.sort(key=lambda x: x["score"], reverse=True)
+
+    return {
+        "symbol":   okx_symbol,
+        "interval": interval,
+        "error":    None,
+        "candles":  len(df),
+        "results":  passed[:10],   # top 10
+    }
 
 
 # ══════════════════════════════════════════════════════════════
-# 5. THỐNG KÊ KẾT QUẢ
+# 5. MAIN – SONG SONG
 # ══════════════════════════════════════════════════════════════
 
-def analyze_results(trades: list, equity: pd.Series) -> None:
-    if not trades:
-        print("❌ Không có lệnh nào được thực hiện.")
+def print_result(r):
+    sym = r["symbol"]
+    tf  = r["interval"].upper()
+
+    if r.get("error"):
+        print(f"\n❌ {sym} {tf}: {r['error']}")
         return
 
-    df_t = pd.DataFrame(trades)
+    results = r["results"]
+    print(f"\n{'═'*70}")
+    print(f"  📊 {sym} | {tf} | {r['candles']} nến | {len(results)} tổ hợp passed")
+    print(f"{'═'*70}")
 
-    total_trades = len(df_t)
-    wins         = df_t[df_t["pnl"] > 0]
-    losses       = df_t[df_t["pnl"] <= 0]
-    winrate      = len(wins) / total_trades * 100
-    total_pnl    = df_t["pnl"].sum()
-    avg_win      = wins["pnl"].mean()   if len(wins)   > 0 else 0
-    avg_loss     = losses["pnl"].mean() if len(losses) > 0 else 0
-    profit_factor = wins["pnl"].sum() / abs(losses["pnl"].sum()) if losses["pnl"].sum() != 0 else float("inf")
+    if not results:
+        print("  ⚠️  Không có tổ hợp nào vượt ngưỡng lọc.")
+        return
 
-    # Drawdown
-    roll_max  = equity.cummax()
-    drawdown  = (equity - roll_max) / roll_max
-    max_dd    = drawdown.min()
+    for i, res in enumerate(results[:5], 1):
+        p  = res["params"]
+        tr = res["train"]
+        te = res["test"]
 
-    # Monthly return
-    eq_monthly   = equity.resample("ME").last()
-    monthly_ret  = eq_monthly.pct_change().dropna() * 100
-    avg_monthly  = monthly_ret.mean()
-    best_month   = monthly_ret.max()
-    worst_month  = monthly_ret.min()
-
-    # Sharpe (đơn giản, không risk-free rate)
-    daily_ret = equity.resample("D").last().pct_change().dropna()
-    sharpe    = (daily_ret.mean() / daily_ret.std()) * np.sqrt(252) if daily_ret.std() > 0 else 0
-
-    final_cap  = equity.iloc[-1]
-    total_ret  = (final_cap - INITIAL_CAPITAL) / INITIAL_CAPITAL * 100
-
-    # ── In kết quả ──────────────────────────────────────────
-    sep = "═" * 55
-    print(f"\n{sep}")
-    print(f"  📊  KẾT QUẢ BACKTEST – XAU/USD ({INTERVAL})")
-    print(sep)
-    print(f"  Vốn ban đầu       : ${INITIAL_CAPITAL:>10,.2f}")
-    print(f"  Vốn cuối          : ${final_cap:>10,.2f}")
-    print(f"  Tổng lợi nhuận    : {total_ret:>+10.2f}%")
-    print(f"  Số lệnh           : {total_trades:>10}")
-    print(f"  Winrate           : {winrate:>10.1f}%")
-    print(f"  Avg win / Avg loss: ${avg_win:>8,.2f} / ${avg_loss:>8,.2f}")
-    print(f"  Profit factor     : {profit_factor:>10.2f}  (>1.5 là tốt)")
-    print(f"  Sharpe ratio      : {sharpe:>10.2f}  (>1.0 là chấp nhận được)")
-    print(f"  Max drawdown      : {max_dd:>10.1%}")
-    print(sep)
-    print(f"  📅  MONTHLY RETURNS")
-    print(sep)
-    print(f"  Avg monthly return: {avg_monthly:>+10.2f}%")
-    print(f"  Best month        : {best_month:>+10.2f}%")
-    print(f"  Worst month       : {worst_month:>+10.2f}%")
-    print(sep)
-
-    # Cảnh báo
-    print("\n  ⚠️  ĐÁNH GIÁ:")
-    if profit_factor < 1.0:
-        print("  ❌ Profit factor < 1 → chiến lược THUA trong dài hạn.")
-        print("     Cần điều chỉnh tham số hoặc đổi chiến lược.")
-    elif profit_factor < 1.5:
-        print("  🟡 Profit factor 1.0–1.5 → chiến lược có edge nhỏ.")
-        print("     Cần tối ưu thêm hoặc thêm filter.")
-    else:
-        print("  ✅ Profit factor > 1.5 → chiến lược có edge.")
-
-    if abs(max_dd) > 0.30:
-        print(f"  ❌ Max drawdown {max_dd:.1%} vượt ngưỡng 30% chịu đựng của bạn.")
-    else:
-        print(f"  ✅ Max drawdown {max_dd:.1%} trong ngưỡng 30%.")
-
-    if avg_monthly >= 3:
-        print(f"  ✅ Avg monthly {avg_monthly:.2f}% đạt mục tiêu 3–5%.")
-    else:
-        print(f"  🟡 Avg monthly {avg_monthly:.2f}% chưa đạt mục tiêu 3%.")
-
-    # Monthly breakdown
-    print(f"\n  📆  CHI TIẾT TỪNG THÁNG:")
-    for period, ret in monthly_ret.items():
-        bar = "█" * int(abs(ret) / 1) if abs(ret) < 50 else "█" * 20
-        sign = "+" if ret >= 0 else ""
-        color = "✅" if ret >= 0 else "❌"
-        print(f"  {color} {period.strftime('%Y-%m')}  {sign}{ret:6.2f}%  {bar}")
-
-    print(f"\n{sep}\n")
-
-    # Lưu file trades
-    df_t.to_csv("trades_result.csv", index=False)
-    print("  💾 Chi tiết lệnh đã lưu vào: trades_result.csv")
-    print(sep)
+        print(f"\n  #{i}  EMA {p['ema_fast']}/{p['ema_slow']}/{p['ema_trend']} | "
+              f"ATR {p['atr_period']} | SL {p['atr_sl_mult']}x | TP {p['atr_tp_mult']}x")
+        print(f"  {'─'*60}")
+        print(f"  {'':35} {'TRAIN':>10}  {'TEST':>10}")
+        print(f"  {'Số lệnh':35} {tr['trades']:>10}  {te['trades'] if te else '–':>10}")
+        print(f"  {'Lệnh/tháng':35} {tr['per_month']:>10}  {te['per_month'] if te else '–':>10}")
+        print(f"  {'Winrate':35} {str(tr['winrate'])+'%':>10}  {str(te['winrate'])+'%' if te else '–':>10}")
+        print(f"  {'Profit Factor':35} {tr['pf']:>10}  {te['pf'] if te else '–':>10}")
+        print(f"  {'Max Drawdown':35} {str(tr['max_dd'])+'%':>10}  {str(te['max_dd'])+'%' if te else '–':>10}")
+        print(f"  {'Avg Monthly':35} {str(tr['avg_monthly'])+'%':>10}  {str(te['avg_monthly'])+'%' if te else '–':>10}")
+        print(f"  {'Score':35} {tr['score']:>10}")
 
 
-# ══════════════════════════════════════════════════════════════
-# 6. HƯỚNG DẪN TỐI ƯU THAM SỐ
-# ══════════════════════════════════════════════════════════════
+def main():
+    print("=" * 70)
+    print("  🔍 GRID SEARCH ĐA COIN – SONG SONG")
+    print(f"  Coins: {', '.join(COINS.keys())}")
+    print(f"  Timeframes: {', '.join(TIMEFRAMES)}")
+    print(f"  Tổ hợp/coin/tf: {len(list(itertools.product(*PARAM_GRID.values()))):,}")
+    print(f"  Tổng tasks: {len(COINS) * len(TIMEFRAMES)}")
+    print("=" * 70)
 
-def print_optimization_guide():
-    print("""
-  📌  HƯỚNG DẪN TỐI ƯU SAU KHI CHẠY:
-  ─────────────────────────────────────────────────────
-  Nếu winrate thấp (<45%):
-    → Thêm filter: RSI < 30 để mua, RSI > 70 để bán
-    → Tăng EMA_TREND lên 100 để lọc trend mạnh hơn
+    tasks = [
+        (okx_sym, ticker, tf)
+        for okx_sym, ticker in COINS.items()
+        for tf in TIMEFRAMES
+    ]
 
-  Nếu profit factor thấp (<1.3):
-    → Tăng ATR_TP_MULT lên 3.0–3.5 (bắt trend xa hơn)
-    → Giảm ATR_SL_MULT xuống 1.2 (cắt lỗ nhanh hơn)
+    t0 = time.time()
+    all_results = []
 
-  Nếu max drawdown quá lớn:
-    → Giảm RISK_PER_TRADE xuống 0.005 (0.5%)
-    → Thêm MAX_OPEN_TRADES = 1 (không giữ 2 lệnh cùng lúc)
+    # Song song với ProcessPoolExecutor
+    with ProcessPoolExecutor(max_workers=len(tasks)) as executor:
+        futures = {executor.submit(run_single, task): task for task in tasks}
+        done = 0
+        for future in as_completed(futures):
+            done += 1
+            task = futures[future]
+            try:
+                result = future.result()
+                all_results.append(result)
+                print(f"  ✅ [{done}/{len(tasks)}] Xong: {task[0]} {task[2].upper()}")
+            except Exception as e:
+                print(f"  ❌ [{done}/{len(tasks)}] Lỗi: {task[0]} {task[2].upper()} — {e}")
 
-  Nếu avg monthly chưa đạt 3%:
-    → Thử INTERVAL = "4h" (ít lệnh hơn, chất lượng hơn)
-    → Mở rộng TRADE_HOURS_UTC = list(range(6, 20))
-  ─────────────────────────────────────────────────────
-  ⚠️  CẢNH BÁO OVERFITTING:
-  Tối ưu quá nhiều trên dữ liệu cũ sẽ không hoạt động
-  trong tương lai. Luôn giữ lại 6 tháng cuối để test
-  riêng (out-of-sample) — KHÔNG dùng để tối ưu.
-    """)
+    elapsed = time.time() - t0
+    print(f"\n⏱ Hoàn thành trong {elapsed:.0f}s")
 
+    # In kết quả
+    # Sắp xếp theo symbol rồi timeframe
+    all_results.sort(key=lambda x: (x["symbol"], x["interval"]))
+    for r in all_results:
+        print_result(r)
 
-# ══════════════════════════════════════════════════════════════
-# 7. MAIN
-# ══════════════════════════════════════════════════════════════
+    # ── Bảng so sánh tổng hợp ────────────────────────────────
+    print(f"\n\n{'═'*70}")
+    print("  🏆 BẢNG SO SÁNH – TOP 1 MỖI COIN/TIMEFRAME")
+    print(f"{'═'*70}")
+    print(f"  {'Coin + TF':<25} {'Params':<28} {'Tr.PF':>6} {'Te.PF':>6} {'Te.DD':>7} {'Te.Mo%':>8}")
+    print(f"  {'─'*70}")
+
+    summary = []
+    for r in all_results:
+        if r.get("error") or not r["results"]:
+            continue
+        best = r["results"][0]
+        p    = best["params"]
+        tr   = best["train"]
+        te   = best["test"]
+        label = f"{r['symbol']} {r['interval'].upper()}"
+        params = f"EMA {p['ema_fast']}/{p['ema_slow']}/{p['ema_trend']} SL{p['atr_sl_mult']} TP{p['atr_tp_mult']}"
+        te_pf  = f"{te['pf']:.3f}" if te else "–"
+        te_dd  = f"{te['max_dd']:.1f}%" if te else "–"
+        te_mon = f"{te['avg_monthly']:.2f}%" if te else "–"
+        star   = " ⭐" if te and te["pf"] >= 1.8 else ""
+        print(f"  {label:<25} {params:<28} {tr['pf']:>6.3f} {te_pf:>6} {te_dd:>7} {te_mon:>8}{star}")
+        summary.append({"label": label, "params": p, "train": tr, "test": te})
+
+    # Lưu kết quả JSON
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    out_file = Path(f"grid_multicoin_{ts}.json")
+    with open(out_file, "w", encoding="utf-8") as f:
+        json.dump(all_results, f, ensure_ascii=False, indent=2)
+    print(f"\n💾 Đã lưu kết quả: {out_file}")
+    print(f"{'═'*70}\n")
+
 
 if __name__ == "__main__":
-    print("=" * 55)
-    print("  🥇 BACKTEST XAU/USD – EMA Crossover + ATR Stop")
-    print("=" * 55)
-    print(f"  Tham số: EMA {EMA_FAST}/{EMA_SLOW}/{EMA_TREND} | "
-          f"ATR {ATR_PERIOD} | SL {ATR_SL_MULT}x | TP {ATR_TP_MULT}x")
-    print(f"  Risk/trade: {RISK_PER_TRADE:.0%} | "
-          f"Vốn: ${INITIAL_CAPITAL:,} | Max DD: {MAX_DRAWDOWN_STOP:.0%}")
-    print()
-
-    # 1. Tải dữ liệu
-    df = fetch_data(SYMBOL, PERIOD, INTERVAL)
-
-    # 2. Thêm chỉ báo
-    df = add_indicators(df)
-
-    # 3. Chạy backtest
-    print("⚙️  Đang chạy backtest...")
-    trades, equity = run_backtest(df)
-    print(f"✅ Hoàn thành. Tổng {len(trades)} lệnh.")
-
-    # 4. Phân tích kết quả
-    analyze_results(trades, equity)
-
-    # 5. Hướng dẫn tối ưu
-    print_optimization_guide()
+    main()
