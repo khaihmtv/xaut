@@ -100,7 +100,7 @@ def api_stats():
 
 @app.get("/api/stream")
 async def stream_logs():
-    """Server-Sent Events — đẩy log mới realtime."""
+    """Server-Sent Events — đẩy log mới  realtime."""
     log_path = get_latest_log()
 
     async def event_generator():
