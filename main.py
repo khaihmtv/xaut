@@ -31,7 +31,7 @@ def get_latest_log() -> Path | None:
 def read_log_lines(n: int = 200) -> list[str]:
     log_path = get_latest_log()
     if not log_path or not log_path.exists():
-        return ["Chưa tìm thấy file log. Bot đã chạy chưa?"]
+        return ["Chưa tìm thấy file log. Bot đã chạy chưa ?"]
     with open(log_path, encoding="utf-8") as f:
         lines = f.readlines()
     return [l.rstrip() for l in lines[-n:]]
