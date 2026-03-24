@@ -86,7 +86,7 @@ def run_test():
     # Chờ lấy entry thật sau khi đặt lệnh
     # TP/SL phải tính từ entry, không phải từ giá ticker
     atr  = 37.0
-    size = 1
+    size = 10  # OKX demo có thể đặt lệnh nhỏ nhất 0.5 SOL, tương đương ~20 USDT margin với đòn bẩy 10x
 
     # ── 2. Đặt lệnh market SHORT ──────────────────────────────
     sep("2. Đặt lệnh MARKET SHORT")

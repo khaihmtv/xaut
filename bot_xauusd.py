@@ -45,6 +45,7 @@ COINS = {
         "atr_period":  14,
         "atr_sl_mult": 2.5,
         "atr_tp_mult": 4.0,
+        "ct_val":      95,    # 1 contract = 1 oz XAU
     },
     "SOL-USDT-SWAP": {
         "timeframe":   "1H",
@@ -54,14 +55,15 @@ COINS = {
         "atr_period":  10,
         "atr_sl_mult": 1.5,
         "atr_tp_mult": 4.0,
+        "ct_val":      0.5,    # 1 contract = 1 SOL trên OKX (verify lại nếu khác)
     },
 }
 
 # ── Cấu hình chung ────────────────────────────────────────────
 LEVERAGE          = 3
-RISK_PER_TRADE    = 0.1    # 1% vốn mỗi lệnh mỗi coin
-MAX_DRAWDOWN_STOP = 0.30    # Dừng toàn bộ bot nếu DD > 20%
-MAX_DAILY_LOSS    = 0.2    # Dừng ngày nếu lỗ > 5%
+RISK_PER_TRADE    = 0.01    # 1% vốn mỗi lệnh mỗi coin
+MAX_DRAWDOWN_STOP = 0.20    # Dừng toàn bộ bot nếu DD > 20%
+MAX_DAILY_LOSS    = 0.05    # Dừng ngày nếu lỗ > 5%
 TRADE_HOURS_UTC   = list(range(6, 18))
 CHECK_INTERVAL    = 60      # giây
 
@@ -392,12 +394,21 @@ class BotState:
 # 6. LOGIC MỖI COIN (chạy trong thread riêng)
 # ══════════════════════════════════════════════════════════════
 
-def calculate_size(equity: float, entry: float, sl: float) -> int:
+def calculate_size(equity: float, entry: float, sl: float, cfg: dict) -> int:
+    """
+    Tính số contract dựa trên risk % vốn.
+    ct_val = giá trị 1 contract tính bằng đơn vị tài sản.
+      XAU-USDT-SWAP: ct_val=1  → 1 contract = 1 oz
+      SOL-USDT-SWAP: ct_val=1  → 1 contract = 1 SOL
+    Nếu OKX dùng ct_val khác (ví dụ 10 SOL/contract) thì chỉnh ct_val=10.
+    """
+    ct_val      = cfg.get("ct_val", 1)
     risk_amount = equity * RISK_PER_TRADE
     sl_distance = abs(entry - sl)
-    if sl_distance <= 0:
+    if sl_distance <= 0 or ct_val <= 0:
         return 0
-    size = (risk_amount / sl_distance) * LEVERAGE
+    # PnL mỗi contract khi chạm SL = sl_distance * ct_val
+    size = (risk_amount * LEVERAGE) / (sl_distance * ct_val)
     return max(1, round(size))
 
 
@@ -481,7 +492,7 @@ def _coin_tick(symbol: str, cfg: dict, client: OKXClient,
         state.running = False
         return
 
-    size = calculate_size(equity, entry, sl)
+    size = calculate_size(equity, entry, sl, cfg)
     if size <= 0:
         logger.warning("[%s] Size = 0. Bỏ qua.", symbol)
         return
