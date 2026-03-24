@@ -45,7 +45,7 @@ COINS = {
         "atr_period":  14,
         "atr_sl_mult": 2.5,
         "atr_tp_mult": 4.0,
-        "ct_val":      95,    # 1 contract = 1 oz XAU
+        "ct_val":      40,    # 1 contract = 1 oz XAU
     },
     "SOL-USDT-SWAP": {
         "timeframe":   "1H",
