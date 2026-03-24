@@ -61,9 +61,9 @@ COINS = {
 
 # ── Cấu hình chung ────────────────────────────────────────────
 LEVERAGE          = 3
-RISK_PER_TRADE    = 0.1    # 1% vốn mỗi lệnh mỗi coin
-MAX_DRAWDOWN_STOP = 0.20    # Dừng toàn bộ bot nếu DD > 20%
-MAX_DAILY_LOSS    = 0.05    # Dừng ngày nếu lỗ > 5%
+RISK_PER_TRADE    = 0.5   # 1% vốn mỗi lệnh mỗi coin
+MAX_DRAWDOWN_STOP = 0.50    # Dừng toàn bộ bot nếu DD > 20%
+MAX_DAILY_LOSS    = 0.5    # Dừng ngày nếu lỗ > 5%
 TRADE_HOURS_UTC   = list(range(6, 18))
 CHECK_INTERVAL    = 60      # giây
 
