@@ -550,8 +550,8 @@ def run_bot():
     logger.info("🤖 MULTI-COIN BOT KHỞI ĐỘNG")
     logger.info("   Coins:     %s", ", ".join(COINS.keys()))
     logger.info("   Leverage:  x%d", LEVERAGE)
-    logger.info("   Risk/coin: %.0f%% | Max DD: %.0f%% | Daily loss: %.0f%%",
-                RISK_PER_TRADE * 100, MAX_DRAWDOWN_STOP * 100, MAX_DAILY_LOSS * 100)
+    logger.info("   Margin/trade: %.0f%% | Max DD: %.0f%% | Daily loss: %.0f%%",
+                MARGIN_PER_TRADE * 100, MAX_DRAWDOWN_STOP * 100, MAX_DAILY_LOSS * 100)
     logger.info("   Mode:      %s", "🔵 SIMULATED" if SIMULATED == "1" else "🔴 LIVE")
     logger.info("=" * 60)
 
