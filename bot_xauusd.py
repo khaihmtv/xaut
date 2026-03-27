@@ -45,7 +45,9 @@ COINS = {
         "atr_period":  14,
         "atr_sl_mult": 2.5,
         "atr_tp_mult": 4.0,
-        "ct_val":      40,    # 1 contract = 1 oz XAU
+        "ct_val":      1,      # 1 contract = 1 oz XAU
+        "min_sz":      0.001,  # đặt tối thiểu 0.001 contract (OKX XAU)
+        "lot_sz":      0.001,  # bước nhảy 0.001 contract
     },
     "SOL-USDT-SWAP": {
         "timeframe":   "1H",
@@ -55,15 +57,17 @@ COINS = {
         "atr_period":  10,
         "atr_sl_mult": 1.5,
         "atr_tp_mult": 4.0,
-        "ct_val":      0.5,    # 1 contract = 1 SOL trên OKX (verify lại nếu khác)
+        "ct_val":      1,      # 1 contract = 1 SOL (OKX confirmed)
+        "min_sz":      0.01,   # đặt tối thiểu 0.01 contract
+        "lot_sz":      0.01,   # bước nhảy 0.01 contract
     },
 }
 
 # ── Cấu hình chung ────────────────────────────────────────────
 LEVERAGE          = 3
-RISK_PER_TRADE    = 0.5   # 1% vốn mỗi lệnh mỗi coin
-MAX_DRAWDOWN_STOP = 0.50    # Dừng toàn bộ bot nếu DD > 20%
-MAX_DAILY_LOSS    = 0.5    # Dừng ngày nếu lỗ > 5%
+MARGIN_PER_TRADE  = 0.30    # 30% vốn làm margin mỗi lệnh
+MAX_DRAWDOWN_STOP = 0.20    # Dừng toàn bộ bot nếu DD > 20%
+MAX_DAILY_LOSS    = 0.05    # Dừng ngày nếu lỗ > 5%
 TRADE_HOURS_UTC   = list(range(6, 18))
 CHECK_INTERVAL    = 60      # giây
 
@@ -394,22 +398,37 @@ class BotState:
 # 6. LOGIC MỖI COIN (chạy trong thread riêng)
 # ══════════════════════════════════════════════════════════════
 
-def calculate_size(equity: float, entry: float, sl: float, cfg: dict) -> int:
+def calculate_size(equity: float, entry: float, sl: float, cfg: dict) -> float:
     """
-    Tính số contract dựa trên risk % vốn.
-    ct_val = giá trị 1 contract tính bằng đơn vị tài sản.
-      XAU-USDT-SWAP: ct_val=1  → 1 contract = 1 oz
-      SOL-USDT-SWAP: ct_val=1  → 1 contract = 1 SOL
-    Nếu OKX dùng ct_val khác (ví dụ 10 SOL/contract) thì chỉnh ct_val=10.
+    Tính số contract theo margin-based:
+        margin  = equity × MARGIN_PER_TRADE     (vốn bỏ ra làm margin)
+        notional = margin × LEVERAGE            (giá trị vị thế)
+        size     = notional / (entry × ct_val)  (số contract)
+
+    Ví dụ equity=114, margin=30%, leverage=3, entry=4427, ct_val=1:
+        margin   = 4.2
+        notional = 02.6
+        size     = 102.6 / (4427 × 1) = 0.023 XAU ✅
+
+    Ví dụ equity=114, margin=30%, leverage=3, entry=88, ct_val=1:
+        margin   = 4.2
+        notional = 02.6
+        size     = 102.6 / (88 × 1) = 1.166 SOL ✅
     """
-    ct_val      = cfg.get("ct_val", 1)
-    risk_amount = equity * RISK_PER_TRADE
-    sl_distance = abs(entry - sl)
-    if sl_distance <= 0 or ct_val <= 0:
+    ct_val = cfg.get("ct_val", 1)
+    min_sz = cfg.get("min_sz", 0.001)
+    lot_sz = cfg.get("lot_sz", 0.001)
+
+    if entry <= 0 or ct_val <= 0:
         return 0
-    # PnL mỗi contract khi chạm SL = sl_distance * ct_val
-    size = (risk_amount * LEVERAGE) / (sl_distance * ct_val)
-    return max(1, round(size))
+
+    margin   = equity * MARGIN_PER_TRADE
+    notional = margin * LEVERAGE
+    size     = notional / (entry * ct_val)
+
+    # Làm tròn theo lot_sz, đảm bảo >= min_sz
+    size = max(min_sz, round(size / lot_sz) * lot_sz)
+    return round(size, 4)
 
 
 def is_trade_hour() -> bool:
@@ -497,9 +516,11 @@ def _coin_tick(symbol: str, cfg: dict, client: OKXClient,
         logger.warning("[%s] Size = 0. Bỏ qua.", symbol)
         return
 
+    margin_used = equity * MARGIN_PER_TRADE
+    notional    = margin_used * LEVERAGE
     rr = cfg["atr_tp_mult"] / cfg["atr_sl_mult"]
-    logger.info("[%s] 🎯 %s | Entry: %.4f | SL: %.4f | TP: %.4f | ATR: %.4f | R:R 1:%.1f | Size: %d",
-                symbol, signal.upper(), entry, sl, tp, atr, rr, size)
+    logger.info("[%s] 🎯 %s | Entry: %.4f | SL: %.4f | TP: %.4f | R:R 1:%.1f | Size: %g | Margin: $%.2f | Notional: $%.2f",
+                symbol, signal.upper(), entry, sl, tp, rr, size, margin_used, notional)
 
     side = "buy" if signal == "long" else "sell"
     try:
