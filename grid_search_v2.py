@@ -45,7 +45,7 @@ PARAM_GRID = {
 }
 
 # ── Cấu hình cố định ──────────────────────────────────────────
-SYMBOL          = "XRP-USD"#"GC=F" "BNB-USD" "XRP-USD"
+SYMBOL          = "BNB-USD"#"GC=F" "BNB-USD" "XRP-USD"
 INTERVAL        = "1h"
 PERIOD          = "2y"
 INITIAL_CAPITAL = 10_000

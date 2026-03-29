@@ -45,9 +45,9 @@ COINS = {
         "atr_period":  14,
         "atr_sl_mult": 2.5,
         "atr_tp_mult": 4.0,
-        "ct_val":      1,      # 1 contract = 1 oz XAU
-        "min_sz":      0.001,  # đặt tối thiểu 0.001 contract (OKX XAU)
-        "lot_sz":      0.001,  # bước nhảy 0.001 contract
+        "ct_val":      0.001,  # 1 contract = 0.001 oz XAU (OKX confirmed)
+        "min_sz":      1,      # đặt tối thiểu 1 contract
+        "lot_sz":      1,      # bước nhảy 1 contract
     },
     "SOL-USDT-SWAP": {
         "timeframe":   "1H",
