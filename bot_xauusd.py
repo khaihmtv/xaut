@@ -49,18 +49,19 @@ COINS = {
         "min_sz":      1,      # đặt tối thiểu 1 contract
         "lot_sz":      1,      # bước nhảy 1 contract
     },
-    "SOL-USDT-SWAP": {
-        "timeframe":   "1H",
-        "ema_fast":    21,
-        "ema_slow":    50,
-        "ema_trend":   80,
-        "atr_period":  10,
-        "atr_sl_mult": 1.5,
-        "atr_tp_mult": 4.0,
-        "ct_val":      1,      # 1 contract = 1 SOL (OKX confirmed)
-        "min_sz":      0.01,   # đặt tối thiểu 0.01 contract
-        "lot_sz":      0.01,   # bước nhảy 0.01 contract
-    },
+    ###
+    #"SOL-USDT-SWAP": {
+    #    "timeframe":   "1H",
+    #    "ema_fast":    21,
+    #    "ema_slow":    50,
+    #    "ema_trend":   80,
+    #    "atr_period":  10,
+    #    "atr_sl_mult": 1.5,
+    #    "atr_tp_mult": 4.0,
+    #    "ct_val":      1,      # 1 contract = 1 SOL (OKX confirmed)
+    #    "min_sz":      0.01,   # đặt tối thiểu 0.01 contract
+     #   "lot_sz":      0.01,   # bước nhảy 0.01 contract
+    #},
 }
 
 # ── Cấu hình chung ────────────────────────────────────────────

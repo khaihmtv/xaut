@@ -1,13 +1,6 @@
 """
-Test đặt lệnh + SL/TP trên OKX Demo
-Chạy: python test_order.py
-
-Script này sẽ:
-1. Lấy giá hiện tại
-2. Đặt 1 lệnh market SHORT nhỏ nhất có thể
-3. Đặt SL/TP riêng qua algo order
-4. In kết quả chi tiết
-5. Đóng lệnh sau 10 giây (cleanup)
+Test đặt lệnh cho XAU-USDT-SWAP và SOL-USDT-SWAP
+Chạy: python test_multi.py
 """
 
 import json
@@ -15,208 +8,238 @@ import time
 import hmac
 import hashlib
 import base64
-import requests
+import sys
 from datetime import datetime, timezone
+
+import requests
 
 try:
     from config import BASE_URL, API_KEY, API_SECRET, API_PASSPHRASE, SIMULATED
 except ImportError:
     print("❌ Không tìm thấy config.py")
-    exit()
+    sys.exit(1)
 
-SYMBOL = "XAU-USDT-SWAP"
+# ── Cấu hình test ─────────────────────────────────────────────
+LEVERAGE       = 3
+MARGIN_PCT     = 0.30   # 30% vốn
 
-# ── Helpers ───────────────────────────────────────────────────
-def ts():
-    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
-
-def sign(timestamp, method, path, body=""):
-    msg = timestamp + method + path + body
-    mac = hmac.new(bytes(API_SECRET, "utf-8"), bytes(msg, "utf-8"), hashlib.sha256)
-    return base64.b64encode(mac.digest()).decode()
-
-def headers(method, path, body=""):
-    t = ts()
-    return {
-        "OK-ACCESS-KEY":        API_KEY,
-        "OK-ACCESS-SIGN":       sign(t, method, path, body),
-        "OK-ACCESS-TIMESTAMP":  t,
-        "OK-ACCESS-PASSPHRASE": API_PASSPHRASE,
-        "Content-Type":         "application/json",
-        "x-simulated-trading":  SIMULATED,
-    }
-
-def request(method, path, body=""):
-    url = BASE_URL + path
-    if method == "GET":
-        r = requests.get(url, headers=headers(method, path, body), timeout=20)
-    else:
-        r = requests.post(url, headers=headers(method, path, body), data=body, timeout=20)
-    data = r.json()
-    return data
-
-def ok(data):
-    return data.get("code") == "0"
-
-def sep(title=""):
-    print(f"\n{'─'*50}")
-    if title:
-        print(f"  {title}")
-        print('─'*50)
+COINS = {
+    "XAU-USDT-SWAP": {"ct_val": 0.001, "min_sz": 1,    "lot_sz": 1},
+    "SOL-USDT-SWAP": {"ct_val": 1,     "min_sz": 0.01, "lot_sz": 0.01},
+}
 
 # ══════════════════════════════════════════════════════════════
 
-def run_test():
-    print("=" * 50)
-    print("  🧪 TEST ĐẶT LỆNH OKX DEMO")
-    print(f"  Symbol: {SYMBOL} | Mode: {'DEMO' if SIMULATED=='1' else '🔴 LIVE'}")
-    print("=" * 50)
+class OKXClient:
+    TIMEOUT = 20
 
-    # ── 1. Giá hiện tại ───────────────────────────────────────
-    sep("1. Lấy giá hiện tại")
-    r = requests.get(f"{BASE_URL}/api/v5/market/ticker?instId={SYMBOL}", timeout=10)
-    ticker = r.json()
-    if "data" not in ticker or not ticker["data"]:
-        print("❌ Không lấy được giá. Kiểm tra symbol:", ticker)
-        return
+    def __init__(self):
+        self.base_url  = BASE_URL
+        self.simulated = SIMULATED
 
-    price = float(ticker["data"][0]["last"])
-    print(f"  ✅ Giá hiện tại: ${price:,.2f}")
+    def _ts(self):
+        return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
-    # Chờ lấy entry thật sau khi đặt lệnh
-    # TP/SL phải tính từ entry, không phải từ giá ticker
-    atr  = 37.0
-    size = 10  # OKX demo có thể đặt lệnh nhỏ nhất 0.5 SOL, tương đương ~20 USDT margin với đòn bẩy 10x
+    def _sign(self, ts, method, path, body=""):
+        msg = ts + method + path + body
+        mac = hmac.new(bytes(API_SECRET, "utf-8"), bytes(msg, "utf-8"), hashlib.sha256)
+        return base64.b64encode(mac.digest()).decode()
 
-    # ── 2. Đặt lệnh market SHORT ──────────────────────────────
-    sep("2. Đặt lệnh MARKET SHORT")
-    order_body = json.dumps({
-        "instId":  SYMBOL,
+    def _headers(self, method, path, body=""):
+        ts = self._ts()
+        return {
+            "OK-ACCESS-KEY":        API_KEY,
+            "OK-ACCESS-SIGN":       self._sign(ts, method, path, body),
+            "OK-ACCESS-TIMESTAMP":  ts,
+            "OK-ACCESS-PASSPHRASE": API_PASSPHRASE,
+            "Content-Type":         "application/json",
+            "x-simulated-trading":  self.simulated,
+        }
+
+    def get(self, path):
+        r = requests.get(self.base_url + path,
+                         headers=self._headers("GET", path), timeout=self.TIMEOUT)
+        r.raise_for_status()
+        return r.json()
+
+    def post(self, path, body: dict):
+        body_str = json.dumps(body)
+        r = requests.post(self.base_url + path,
+                          headers=self._headers("POST", path, body_str),
+                          data=body_str, timeout=self.TIMEOUT)
+        r.raise_for_status()
+        return r.json()
+
+    def get_equity(self):
+        data = self.get("/api/v5/account/balance")
+        for acc in data.get("data", []):
+            for d in acc.get("details", []):
+                if d.get("ccy") == "USDT":
+                    return float(d.get("eq", 0))
+        return 0.0
+
+    def get_ticker(self, symbol):
+        data = self.get(f"/api/v5/market/ticker?instId={symbol}")
+        return float(data["data"][0]["last"])
+
+    def get_positions(self, symbol):
+        data = self.get(f"/api/v5/account/positions?instId={symbol}")
+        return [p for p in data.get("data", []) if float(p.get("pos", 0)) != 0]
+
+    def cancel_algo_orders(self, symbol):
+        path = f"/api/v5/trade/orders-algo-pending?instId={symbol}&ordType=conditional"
+        data = self.get(path)
+        orders = data.get("data", [])
+        if not orders:
+            return 0
+        cancel = [{"instId": symbol, "algoId": o["algoId"]} for o in orders]
+        self.post("/api/v5/trade/cancel-algos", cancel)
+        return len(orders)
+
+    def close_position(self, symbol, pos_side):
+        return self.post("/api/v5/trade/close-position", {
+            "instId":  symbol,
+            "mgnMode": "cross",
+            "posSide": pos_side,
+        })
+
+
+def calc_size(equity, price, cfg):
+    margin   = equity * MARGIN_PCT
+    notional = margin * LEVERAGE
+    size     = notional / (price * cfg["ct_val"])
+    size     = max(cfg["min_sz"], round(size / cfg["lot_sz"]) * cfg["lot_sz"])
+    return round(size, 4)
+
+
+def test_coin(client: OKXClient, symbol: str, cfg: dict, equity: float):
+    sep = "─" * 52
+    print(f"\n{sep}")
+    print(f"  🪙 {symbol}")
+    print(sep)
+
+    # 1. Giá hiện tại
+    print("  1. Lấy giá...")
+    price = client.get_ticker(symbol)
+    size  = calc_size(equity, price, cfg)
+    margin_used = equity * MARGIN_PCT
+    notional    = margin_used * LEVERAGE
+    print(f"     Giá:      ${price:,.4f}")
+    print(f"     Margin:   ${margin_used:.2f} ({MARGIN_PCT*100:.0f}% vốn)")
+    print(f"     Notional: ${notional:.2f} (x{LEVERAGE} leverage)")
+    print(f"     Size:     {size} contracts = {size * cfg['ct_val']:.4f} units")
+
+    # 2. Set leverage
+    print("  2. Set leverage x3...")
+    for ps in ("long", "short"):
+        r = client.post("/api/v5/account/set-leverage", {
+            "instId": symbol, "lever": str(LEVERAGE),
+            "mgnMode": "cross", "posSide": ps,
+        })
+        ok = "✅" if r.get("code") == "0" else f"❌ {r.get('msg')}"
+        print(f"     {ps}: {ok}")
+
+    # 3. Đặt lệnh SHORT market
+    print("  3. Đặt lệnh SHORT market...")
+    r = client.post("/api/v5/trade/order", {
+        "instId":  symbol,
         "tdMode":  "cross",
         "side":    "sell",
         "posSide": "short",
         "ordType": "market",
         "sz":      str(size),
     })
-    order_resp = request("POST", "/api/v5/trade/order", order_body)
-    print(f"  Response: {order_resp}")
+    if r.get("code") != "0" or r["data"][0]["sCode"] != "0":
+        print(f"     ❌ THẤT BẠI: {r}")
+        return False
+    ord_id = r["data"][0]["ordId"]
+    print(f"     ✅ Thành công! ordId: {ord_id}")
 
-    if not ok(order_resp):
-        print(f"  ❌ Đặt lệnh thất bại: {order_resp.get('msg')}")
-        print("\n  💡 Gợi ý:")
-        print("     - Kiểm tra tài khoản demo có đủ margin không")
-        print("     - Vào OKX Demo → bật symbol XAU-USDT-SWAP")
-        print("     - Kiểm tra quyền API có bật Trade không")
-        return
-
-    ord_id = order_resp["data"][0]["ordId"]
-    print(f"  ✅ Lệnh market SHORT thành công! ordId: {ord_id}")
-    print("  ⏳ Chờ 2 giây để lệnh khớp...")
+    # 4. Lấy entry thật
+    print("  4. Lấy entry price thật...")
     time.sleep(2)
+    positions = client.get_positions(symbol)
+    if not positions:
+        print("     ⚠️  Không tìm thấy vị thế!")
+        return False
+    entry = float(positions[0]["avgPx"])
+    print(f"     Entry thật: ${entry:,.4f}")
 
-    # Lấy entry price thật từ vị thế
-    pos_check = request("GET", f"/api/v5/account/positions?instId={SYMBOL}")
-    positions_check = [p for p in pos_check.get("data", []) if float(p.get("pos", 0)) != 0]
-    if positions_check:
-        entry_price = float(positions_check[0]["avgPx"])
-    else:
-        entry_price = price   # fallback về giá ticker
-    print(f"  📌 Entry price thật: ${entry_price:,.2f}")
+    # 5. Đặt SL/TP (giả lập ATR ~1%)
+    sl = round(entry * 1.015, 4)  # SL +1.5% cho short
+    tp = round(entry * 0.960, 4)  # TP -4.0% cho short
+    print(f"  5. Đặt SL @ {sl} | TP @ {tp}...")
 
-    # Tính SL/TP từ entry thật — SHORT: SL trên, TP dưới entry
-    sl = round(entry_price + 2.0 * atr, 2)
-    tp = round(entry_price - 3.0 * atr, 2)
-    print(f"  📐 ATR: {atr} | SL: {sl} (+{2*atr}) | TP: {tp} (-{3*atr})")
-    time.sleep(2)
+    for is_sl in [True, False]:
+        trigger_px = sl if is_sl else tp
+        tkey = "slTriggerPx" if is_sl else "tpTriggerPx"
+        pkey = "slOrdPx"     if is_sl else "tpOrdPx"
+        ttype = "slTriggerPxType" if is_sl else "tpTriggerPxType"
+        label = "SL" if is_sl else "TP"
+        r = client.post("/api/v5/trade/order-algo", {
+            "instId":  symbol, "tdMode": "cross",
+            "side":    "buy",  "posSide": "short",
+            "ordType": "conditional", "sz": str(size),
+            tkey: str(trigger_px), pkey: "-1", ttype: "last",
+        })
+        if r.get("code") == "0" and r["data"][0]["sCode"] == "0":
+            print(f"     ✅ {label} @ {trigger_px}")
+        else:
+            print(f"     ❌ {label} thất bại: {r}")
 
-    # ── 3. Đặt SL/TP riêng lẻ (bỏ qua OCO vì OKX demo không hỗ trợ) ──
-    sep("3. Đặt SL conditional")
-    sl_body = json.dumps({
-        "instId":          SYMBOL,
-        "tdMode":          "cross",
-        "side":            "buy",
-        "posSide":         "short",
-        "ordType":         "conditional",
-        "sz":              str(size),
-        "slTriggerPx":     str(sl),
-        "slOrdPx":         "-1",
-        "slTriggerPxType": "last",
-    })
-    sl_resp = request("POST", "/api/v5/trade/order-algo", sl_body)
-    print(f"  Response: {sl_resp}")
-    if ok(sl_resp):
-        print(f"  ✅ SL đặt thành công @ {sl}")
-        algo_ok = True
-    else:
-        print(f"  ❌ SL thất bại: {sl_resp}")
-        algo_ok = False
-
-    sep("4. Đặt TP conditional")
-    tp_body = json.dumps({
-        "instId":          SYMBOL,
-        "tdMode":          "cross",
-        "side":            "buy",
-        "posSide":         "short",
-        "ordType":         "conditional",
-        "sz":              str(size),
-        "tpTriggerPx":     str(tp),
-        "tpOrdPx":         "-1",
-        "tpTriggerPxType": "last",
-    })
-    tp_resp = request("POST", "/api/v5/trade/order-algo", tp_body)
-    print(f"  Response: {tp_resp}")
-    if ok(tp_resp):
-        print(f"  ✅ TP đặt thành công @ {tp}")
-    else:
-        print(f"  ❌ TP thất bại: {tp_resp}")
-        algo_ok = False
-
-    # ── 5. Kiểm tra vị thế ────────────────────────────────────
-    sep("5. Kiểm tra vị thế hiện tại")
-    time.sleep(1)
-    pos_resp = request("GET", f"/api/v5/account/positions?instId={SYMBOL}")
-    positions = [p for p in pos_resp.get("data", []) if float(p.get("pos", 0)) != 0]
+    # 6. Kiểm tra vị thế
+    print("  6. Kiểm tra vị thế...")
+    positions = client.get_positions(symbol)
     if positions:
-        p = positions[0]
-        print(f"  ✅ Vị thế đang mở:")
-        print(f"     Side:      {p.get('posSide')}")
-        print(f"     Size:      {p.get('pos')}")
-        print(f"     Entry:     {p.get('avgPx')}")
-        print(f"     UnPnL:     {p.get('upl')} USDT")
+        pos = positions[0]
+        print(f"     ✅ Vị thế: {pos['posSide']} | Size: {pos['pos']} | UnPnL: {pos['upl']} USDT")
     else:
-        print("  ⚠️  Không thấy vị thế — có thể chưa khớp hoặc đã đóng")
+        print("     ⚠️  Không có vị thế!")
 
-    # ── 6. Cleanup: đóng vị thế ───────────────────────────────
-    sep("6. Cleanup — Đóng vị thế test")
-    print("  ⏳ Chờ 5 giây rồi đóng...")
-    time.sleep(5)
-
-    # Huỷ algo orders trước
-    algo_list_resp = request("GET", f"/api/v5/trade/orders-algo-pending?instId={SYMBOL}&ordType=oco,conditional")
-    algo_orders = algo_list_resp.get("data", [])
-    if algo_orders:
-        cancel_algos = [{"instId": SYMBOL, "algoId": o["algoId"]} for o in algo_orders]
-        cancel_resp  = request("POST", "/api/v5/trade/cancel-algos", json.dumps(cancel_algos))
-        print(f"  Huỷ algo: {cancel_resp.get('code')} — {len(cancel_algos)} orders")
-
-    # Đóng vị thế
-    close_body = json.dumps({"instId": SYMBOL, "mgnMode": "cross", "posSide": "short"})
-    close_resp = request("POST", "/api/v5/trade/close-position", close_body)
-    if ok(close_resp):
-        print("  ✅ Đã đóng vị thế test thành công!")
+    # 7. Cleanup
+    print("  7. Cleanup (đóng vị thế test)...")
+    time.sleep(3)
+    n = client.cancel_algo_orders(symbol)
+    print(f"     Huỷ {n} algo orders")
+    r = client.close_position(symbol, "short")
+    if r.get("code") == "0":
+        print(f"     ✅ Đóng vị thế thành công!")
     else:
-        print(f"  ⚠️  Đóng vị thế: {close_resp}")
+        print(f"     ❌ Đóng thất bại: {r}")
 
-    # ── Tổng kết ──────────────────────────────────────────────
-    sep("📋 TỔNG KẾT")
-    print(f"  Market order:  ✅ Hoạt động")
-    print(f"  SL/TP (OCO):   {'✅ Hoạt động' if algo_ok else '⚠️  Dùng fallback conditional'}")
-    print()
-    if algo_ok:
-        print("  🚀 Bot sẵn sàng chạy! Deploy và restart là được.")
-    else:
-        print("  🚀 Bot vẫn hoạt động được với fallback SL/TP riêng lẻ.")
-    print("=" * 50)
+    return True
+
+
+def main():
+    mode = "🔵 SIMULATED" if SIMULATED == "1" else "🔴 LIVE"
+    print("=" * 52)
+    print(f"  🧪 TEST ĐẶT LỆNH MULTI-COIN")
+    print(f"  Mode: {mode}")
+    print(f"  Margin/trade: {MARGIN_PCT*100:.0f}% | Leverage: x{LEVERAGE}")
+    print("=" * 52)
+
+    client = OKXClient()
+
+    print("\n💰 Lấy equity...")
+    equity = client.get_equity()
+    print(f"   Equity: ${equity:.2f} USDT")
+
+    results = {}
+    for symbol, cfg in COINS.items():
+        try:
+            ok = test_coin(client, symbol, cfg, equity)
+            results[symbol] = "✅ OK" if ok else "❌ FAIL"
+        except Exception as e:
+            print(f"\n  ❌ Lỗi {symbol}: {e}")
+            results[symbol] = f"❌ ERROR: {e}"
+
+    print(f"\n{'═'*52}")
+    print("  📋 KẾT QUẢ")
+    print(f"{'═'*52}")
+    for sym, res in results.items():
+        print(f"  {sym}: {res}")
+    print(f"{'═'*52}")
+
 
 if __name__ == "__main__":
-    run_test()
+    main()
