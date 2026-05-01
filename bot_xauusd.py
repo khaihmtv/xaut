@@ -66,7 +66,7 @@ COINS = {
 
 # ── Cấu hình chung ────────────────────────────────────────────
 LEVERAGE          = 3
-MARGIN_PER_TRADE  = 0.30    # 30% vốn làm margin mỗi lệnh
+MARGIN_PER_TRADE  = 0.97    # 30% vốn làm margin mỗi lệnh
 MAX_DRAWDOWN_STOP = 0.20    # Dừng toàn bộ bot nếu DD > 20%
 MAX_DAILY_LOSS    = 0.05    # Dừng ngày nếu lỗ > 5%
 TRADE_HOURS_UTC   = list(range(6, 18))
